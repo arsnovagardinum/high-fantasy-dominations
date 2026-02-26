@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>High Fantasy Dominations - Isometric</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#1a2f28;font-family:'Arial',sans-serif}
+#gameCanvas{display:block}
+#loading{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.95);padding:40px;border-radius:15px;border:3px solid #ffd700;text-align:center;z-index:3000;color:#fff}
+#loading h2{color:#ffd700;margin-bottom:20px;font-family:'Cinzel',serif}
+.progress-bar{width:300px;height:20px;background:rgba(255,255,255,0.1);border-radius:10px;overflow:hidden;margin:20px 0}
+.progress-fill{height:100%;background:linear-gradient(90deg,#ffd700,#ffed4e);width:0%;transition:width 0.3s}
+#ui{position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.8);padding:15px;border-radius:10px;color:#fff;font-family:'Cinzel',serif}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="loading">
+  <h2>⚔️ Loading Assets...</h2>
+  <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+  <p id="loading-text">Initializing...</p>
+</div>
+<div id="ui" style="display:none">
+  <div>🪙 Gold: <span id="gold">800</span></div>
+  <div>💎 Mana: <span id="mana">150</span></div>
+  <div style="margin-top:10px;font-size:12px">Right-click drag to pan camera</div>
+</div>
+
+<script>
+// ==================== CONFIGURATION ====================
+const GITHUB_USER = 'arsnovagardinum';
+const REPO = 'high-fantasy-dominations';
+const BRANCH = 'main';
+
+// Your uploaded assets
+const ASSETS = {
+  town_core: 'assets/buildings/town_core.png',
+  gold_mine: 'assets/buildings/gold_mine.png',
+  mana_well: 'assets/buildings/mana_well.png',
+  grass: 'assets/terrain/grass_tile.png'
+};
+
+function getAssetURL(path) {
+  return `https://cdn.jsdelivr.net/gh/${GITHUB_USER}/${REPO}@${BRANCH}/${path}`;
+}
+
+// ==================== ISOMETRIC SETTINGS ====================
+const ISO = {
+  tileWidth: 128,
+  tileHeight: 64,
+  gridSize: 35
+};
+
+// ==================== GAME STATE ====================
+const State = {
+  gold: 800,
+  mana: 150,
+  buildings: [
+    {x: 14, y: 14, type: 'town_core'},
+    {x: 10, y: 16, type: 'gold_mine'},
+    {x: 18, y: 16, type: 'mana_well'}
+  ],
+  camera: {x: 0, y: 0},
+  assets: {},
+  assetsLoaded: 0,
+  totalAssets: Object.keys(ASSETS).length
+};
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ==================== ASSET LOADER ====================
+function loadAsset(name, path) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = getAssetURL(path);
+    
+    img.onload = () => {
+      State.assetsLoaded++;
+      updateProgress();
+      console.log(`✅ Loaded: ${name}`);
+      resolve({name, img});
+    };
+    
+    img.onerror = () => {
+      State.assetsLoaded++;
+      updateProgress();
+      console.error(`❌ Failed to load: ${name}\nURL: ${url}`);
+      resolve({name, img: null});
+    };
+    
+    img.src = url;
+  });
+}
+
+function updateProgress() {
+  const percent = (State.assetsLoaded / State.totalAssets) * 100;
+  document.getElementById('progress').style.width = percent + '%';
+  document.getElementById('loading-text').innerText = 
+    `Loaded ${State.assetsLoaded}/${State.totalAssets} assets...`;
+}
+
+async function loadAllAssets() {
+  const promises = Object.entries(ASSETS).map(([name, path]) => 
+    loadAsset(name, path)
+  );
+  
+  const loaded = await Promise.all(promises);
+  
+  loaded.forEach(({name, img}) => {
+    State.assets[name] = img;
+  });
+  
+  // Start game after short delay
+  setTimeout(() => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('ui').style.display = 'block';
+    initGame();
+  }, 500);
+}
+
+// ==================== ISOMETRIC FUNCTIONS ====================
+function isoToScreen(gridX, gridY) {
+  return {
+    x: (gridX - gridY) * ISO.tileWidth / 2 + canvas.width / 2 + State.camera.x,
+    y: (gridX + gridY) * ISO.tileHeight / 2 + canvas.height / 2 + State.camera.y
+  };
+}
+
+function drawIsometricTile(gridX, gridY, color) {
+  const pos = isoToScreen(gridX, gridY);
+  
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(pos.x, pos.y);
+  ctx.lineTo(pos.x + ISO.tileWidth / 2, pos.y + ISO.tileHeight / 2);
+  ctx.lineTo(pos.x, pos.y + ISO.tileHeight);
+  ctx.lineTo(pos.x - ISO.tileWidth / 2, pos.y + ISO.tileHeight / 2);
+  ctx.closePath();
+  ctx.fill();
+  
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawIsometricSprite(gridX, gridY, asset, footprintW = 1, footprintH = 1) {
+  if (!asset) return;
+  
+  const pos = isoToScreen(gridX, gridY);
+  const offsetX = (footprintW - 1) * ISO.tileWidth / 2;
+  const offsetY = (footprintH - 1) * ISO.tileHeight / 2;
+  
+  // Draw sprite centered and elevated
+  const drawX = pos.x - asset.width / 2 - offsetX;
+  const drawY = pos.y - asset.height + ISO.tileHeight / 2 - offsetY;
+  
+  ctx.drawImage(asset, drawX, drawY);
+}
+
+function getBuildingFootprint(type) {
+  const footprints = {
+    town_core: {w: 6, h: 6},
+    gold_mine: {w: 4, h: 4},
+    mana_well: {w: 4, h: 4}
+  };
+  return footprints[type] || {w: 1, h: 1};
+}
+
+function drawBuilding(b) {
+  const asset = State.assets[b.type];
+  const footprint = getBuildingFootprint(b.type);
+  
+  // Draw foundation tiles
+  for (let x = 0; x < footprint.w; x++) {
+    for (let y = 0; y < footprint.h; y++) {
+      drawIsometricTile(b.x + x, b.y + y, '#3d5a4a');
+    }
+  }
+  
+  // Draw building sprite
+  drawIsometricSprite(b.x, b.y, asset, footprint.w, footprint.h);
+}
+
+function drawTerrain(gridX, gridY) {
+  const grassAsset = State.assets.grass;
+  const pos = isoToScreen(gridX, gridY);
+  
+  if (grassAsset) {
+    ctx.drawImage(grassAsset, pos.x - 64, pos.y - 32, 128, 64);
+  } else {
+    drawIsometricTile(gridX, gridY, '#3d5a4a');
+  }
+}
+
+// ==================== GAME LOOP ====================
+function gameLoop() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  const startCol = Math.floor((-State.camera.x + canvas.width/2) / (ISO.tileWidth/2)) - 2;
+  const endCol = startCol + (canvas.width / (ISO.tileWidth/2)) + 4;
+  const startRow = Math.floor((-State.camera.y + canvas.height/2) / (ISO.tileHeight/2)) - 2;
+  const endRow = startRow + (canvas.height / (ISO.tileHeight/2)) + 4;
+  
+  // Draw terrain
+  for (let c = Math.max(0, startCol); c < Math.min(ISO.gridSize, endCol); c++) {
+    for (let r = Math.max(0, startRow); r < Math.min(ISO.gridSize, endRow); r++) {
+      drawTerrain(c, r);
+    }
+  }
+  
+  // Draw buildings (sorted by Y for depth)
+  const sorted = [...State.buildings].sort((a, b) => {
+    const posA = isoToScreen(a.x + 3, a.y + 3);
+    const posB = isoToScreen(b.x + 3, b.y + 3);
+    return posA.y - posB.y;
+  });
+  
+  sorted.forEach(b => drawBuilding(b));
+  
+  requestAnimationFrame(gameLoop);
+}
+
+// ==================== INIT ====================
+function initGame() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  
+  // Center camera on Town Core
+  const tcPos = isoToScreen(17, 17);
+  State.camera.x = -tcPos.x + canvas.width / 2;
+  State.camera.y = -tcPos.y + canvas.height / 2 + 100;
+  
+  gameLoop();
+}
+
+// ==================== CONTROLS ====================
+let isPanning = false;
+let lastMouse = {x: 0, y: 0};
+
+canvas.addEventListener('mousedown', e => {
+  if (e.button === 2) {
+    isPanning = true;
+    lastMouse = {x: e.clientX, y: e.clientY};
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (isPanning) {
+    State.camera.x += e.clientX - lastMouse.x;
+    State.camera.y += e.clientY - lastMouse.y;
+    lastMouse = {x: e.clientX, y: e.clientY};
+  }
+});
+
+canvas.addEventListener('mouseup', () => isPanning = false);
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+
+// ==================== START ====================
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+loadAllAssets();
+</script>
+</body>
+</html>
